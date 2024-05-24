@@ -8,7 +8,7 @@ const addAddress = require('../controllers/adress');
 const userAdress = require('../controllers/useradress');
 // const paymentController = require('../controllers/PaymentController');
 const deleteaddress = require('../controllers/deleteaddress')
-const orderController = require('../controllers/orderController'); 
+const orderController = require('../controllers/orderController');
 const { deleteCartDetails } = require('../controllers/deletecartdetails');
 const axios = require('axios');
 const sha256 = require('sha256');
@@ -55,7 +55,7 @@ router.get('/getAllOrders/:userId', orderController.getAllOrders);
 //payment testing 
 router.post('/pay', (req, res) => {
     const payEndpoint = "/pg/v1/pay"
-    const { userId, amount , phonenumber , merchantTransactionId } = req.body;
+    const { userId, amount, phonenumber, merchantTransactionId } = req.body;
     const salt_key = process.env.SALT_KEY;
     const salt_Index = process.env.SALT_INDEX;
     const amountInPaise = amount * 100;
@@ -65,9 +65,9 @@ router.post('/pay', (req, res) => {
         "merchantTransactionId": merchantTransactionId,
         "merchantUserId": userId,
         "amount": amountInPaise,
-        "redirectUrl": `http://localhost:3000/OrderConformation/:merchantTransactionId`,
+        "redirectUrl": `http://localhost:3000/OrderConformation/${merchantTransactionId}`,
         "redirectMode": "REDIRECT",
-        "callbackUrl": "https://backendtestversel.vercel.app/api/phonepe/webhook",
+        "callbackUrl": "https://backend.caterorange.com/api/phonepe/webhook",
         "mobileNumber": phonenumber,
         "paymentInstrument": {
             "type": "PAY_PAGE"
@@ -95,7 +95,7 @@ router.post('/pay', (req, res) => {
         .request(options)
         .then(function (response) {
             console.log(response.data);
-            console.log(response.data.data.instrumentResponse.redirectInfo,"redirectinfo")
+            console.log(response.data.data.instrumentResponse.redirectInfo, "redirectinfo")
             // res.redirect(response.data.instrumentResponse.redirectInfo.url)
             res.send(response.data);
         })
@@ -106,58 +106,104 @@ router.post('/pay', (req, res) => {
 
 
 router.post('/phonepe/webhook', async (req, res) => {
-    const callbackHeaders = req.headers;
-    const base64response = req.body.response;
-    const xVerifyHeader = callbackHeaders['X-VERIFY'];
-    const decodedResponse = Buffer.from(base64response, 'base64').toString('utf8');
-    console.log(decodedResponse);
-    const parsedResponse = JSON.parse(decodedResponse);
-    const { merchantTransactionId, code } = parsedResponse.data;
-    const updatedOrder = await Order.findOneAndUpdate(
-        { merchantTransactionId },
-        { code, updatedAt: Date.now() },  // Update code and updatedAt
-        { new: true } // Return the updated document
-    );
+    try {
+        const callbackHeaders = req.headers;
+        const base64response = req.body.response;
+        const xVerifyHeader = callbackHeaders['x-verify'];
+        const decodedResponse = Buffer.from(base64response, 'base64').toString('utf8');
+        const parsedResponse = JSON.parse(decodedResponse);
+        const merchantTransactionId = parsedResponse.data.merchantTransactionId;
+        const code = parsedResponse.code;
 
-    if (!updatedOrder) {
-        console.error(`Order not found for merchantTransactionId: ${merchantTransactionId}`);
-        return res.status(404).send(`Order not found for merchantTransactionId: ${merchantTransactionId}`);
+        console.log(parsedResponse,"parsedResponse");
+        console.log(merchantTransactionId,code,"merchantTransactionId   code");
+
+        // Compute the checksum
+        const payload = base64response + process.env.SALT_KEY;
+        const computedChecksum = crypto.createHash('sha256').update(payload).digest('hex') + '###' + process.env.SALT_INDEX;
+
+        if (xVerifyHeader !== computedChecksum) {
+            console.error('Checksum validation failed');
+            return res.status(400).send('Checksum validation failed');
+        }
+
+        const updatedOrder = await Order.findOneAndUpdate(
+            { merchantTransactionId },
+            {
+                code,
+                updatedAt: Date.now(),
+            },
+            { new: true, useFindAndModify: false } // Ensure it returns the updated document
+        );
+
+        if (!updatedOrder) {
+            console.error(`Order not found for merchantTransactionId: ${merchantTransactionId}`);
+            return res.status(404).send(`Order not found for merchantTransactionId: ${merchantTransactionId}`);
+        }
+
+        console.log(`Order updated successfully: ${updatedOrder}`);
+        res.status(200).send(`Order updated successfully: ${updatedOrder}`);
+    } catch (error) {
+        console.error('Error processing webhook:', error);
+        res.status(500).send('Internal server error');
+    }
+});
+
+
+router.post("/status/:merchantTransactionId", async (req, res) => {
+    const { merchantTransactionId } = req.params;
+    const merchantId = process.env.MERCHANT_ID;
+
+    if (!merchantTransactionId) {
+        return res.status(400).send('merchantTransactionId is required');
     }
 
-    console.log(`Order updated successfully: ${updatedOrder}`);
-    res.status(200).send(`Order updated successfully: ${updatedOrder}`);
+    try {
+        const xVerify = sha256(`/pg/v1/status/${merchantId}/${merchantTransactionId}` + process.env.SALT_KEY).toString() + "###" + process.env.SALT_INDEX;
 
-})
-
-
-router.post("/status/:merchantTransactionId", (req, res) => {
-    const { merchantTransactionId } = req.params;
-    console.log(merchantTransactionId,"tid")
-    const merchantId = process.env.MERCHANT_ID;
-    if (merchantTransactionId) {
-        const xVerify = sha256(`/pg/v1/status/${merchantId}/${merchantTransactionId}`+ process.env.SALT_KEY)+"###"+process.env.SALT_INDEX
         const options = {
             method: 'get',
             url: `https://api-preprod.phonepe.com/apis/pg-sandbox/pg/v1/status/${merchantId}/${merchantTransactionId}`,
             headers: {
                 'Content-Type': 'application/json',
-                'X-MERCHANT-ID':merchantId,	
+                'X-MERCHANT-ID': merchantId,
                 'X-VERIFY': xVerify,
             },
         };
-        axios
-            .request(options)
-            .then(function (response) {
-                console.log(response.data);
-                res.send(response.data)
-            })
-            .catch(function (error) {
-                console.error(error);
-            });
 
+        const response = await axios.request(options);
+        const responseData = response.data;
+
+        if (responseData.success) {
+            const code = responseData.code;
+            switch (code) {
+                case 'PAYMENT_SUCCESS':
+                    // Handle payment success
+                    console.log('Payment successful:', responseData.data);
+                    break;
+                case 'PAYMENT_ERROR':
+                    // Handle payment error
+                    console.log('Payment failed:', responseData.data);
+                    break;
+                case 'INTERNAL_SERVER_ERROR':
+                    // Handle internal server error
+                    console.log('Internal server error:', responseData.message);
+                    break;
+                default:
+                    // Handle unexpected response codes
+                    console.log('Unexpected response code:', code);
+            }
+        } else {
+            // Handle unsuccessful responses
+            console.log('Response error:', responseData.message);
+        }
+
+        res.send(responseData);
+    } catch (error) {
+        console.error('Error checking payment status:', error);
+        res.status(500).send('Internal server error');
     }
-})
-
+});
 
 
 module.exports = router;
