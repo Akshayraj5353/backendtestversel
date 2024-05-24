@@ -12,7 +12,7 @@ const OrderSchema = new Schema({
     createdAt: { type: Number, default: Math.floor(Date.now() / 1000) },
     updatedAt: { type: Date, default: Date.now },
     merchantTransactionId: { type: String, required: true, unique: true },
-    code: { type: String, default: '' }
+    code: { type: String, enum: ['Pending', 'Success', 'Failed'], default: 'Pending' },
 });
 
 OrderSchema.pre('save', function (next) {
