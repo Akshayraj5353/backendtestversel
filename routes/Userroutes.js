@@ -67,7 +67,7 @@ router.post('/pay', (req, res) => {
         "amount": amountInPaise,
         "redirectUrl": `http://localhost:3000/OrderConformation/:merchantTransactionId`,
         "redirectMode": "REDIRECT",
-        "callbackUrl": "https://backend.caterorange.com/api/phonepe/webhook",
+        "callbackUrl": "https://backendtestversel.vercel.app/api/phonepe/webhook",
         "mobileNumber": phonenumber,
         "paymentInstrument": {
             "type": "PAY_PAGE"
